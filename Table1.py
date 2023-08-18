@@ -2,7 +2,6 @@
 # coding: utf8
 # Written by Galchenkova M.
 
-
 import os
 import sys
 import glob
@@ -16,7 +15,7 @@ import shlex
 import time
 
 os.nice(0)
-indexes = ['Num. patterns/hits', 'Indexed patterns/crystals', 'CC* intersects with Rsplit at', 'Resolution', 'Rsplit (%)', 'CC1/2', 'CC*', 'CCano', 'SNR', 'Completeness (%)', 'Multiplicity','Total Measurements' ,'Unique Reflections', 'Wilson B-factor']
+indexes = ['Num. patterns/hits', 'Indexed patterns/crystals', 'CC* intersects with Rsplit at', 'Resolution', 'Rsplit (%)', 'CC1/2', 'CC*', 'CCano', 'SNR', 'Completeness (%)', 'Multiplicity','Total Measurements' ,'Unique Reflections', 'Wilson B-factor', 'Rfree/Rwork', 'Refinement resolution cut-off']
 
 x_arg_name = 'd'
 y_arg_name = 'CC*'
@@ -24,6 +23,7 @@ y_arg_name2 = 'Rsplit/%'
 
 
 data_info = defaultdict(dict)
+path_to_the_script = os.path.dirname(__file__)
 
 class CustomFormatter(argparse.RawDescriptionHelpFormatter,
                       argparse.ArgumentDefaultsHelpFormatter):
@@ -75,10 +75,9 @@ def run_partialator(hkl_input_file, highres, pg, pdb, nsh):
     data = os.path.basename(hkl_input_file).split('.')[0]
     
     if os.path.exists(f'{data}.hkl1') and os.path.exists(f'{data}.hkl2'):
-        print(77)
         
-        print('SBATCH PROCESS\n')
         job_file = os.path.join(path,"%s.sh" % data)
+        
         with open(job_file, 'w+') as fh:
             fh.writelines("#!/bin/sh\n")
             fh.writelines("#SBATCH --job=%s\n" % data)
@@ -119,9 +118,9 @@ def run_partialator(hkl_input_file, highres, pg, pdb, nsh):
             
             max_dd = round(10./highres,3)
 
-            command = f"python3 /gpfs/cfel/group/cxi/scratch/data/2020/EXFEL-2019-Schmidt-Mar-p002450/scratch/galchenm/scripts_for_work/plot_func/many_plots-upt-v2.py -i {data}_CCstar.dat -x '1/d' -y 'CC*' -o {data}.png -add_nargs {data}_Rsplit.dat -yad 'Rsplit/%' -x_lim_dw 1. -x_lim_up {max_dd} -t {data} -legend {data} >> output.err\n"
+            command = f"python3 {path_to_the_script}/many_plots-upt-v2.py -i {data}_CCstar.dat -x '1/d' -y 'CC*' -o {data}.png -add_nargs {data}_Rsplit.dat -yad 'Rsplit/%' -x_lim_dw 1. -x_lim_up {max_dd} -t {data} -legend {data} >> output.err\n"
             fh.writelines(command)
-            
+        print(f'The {job_file} is going to be submitted')    
         os.system("sbatch %s" % job_file)
         
         return "%s_CCstar.dat" % data, "%s.err" % data
@@ -141,29 +140,49 @@ def parse_err(name_of_run, filename, CCstar_dat_file):
     total_measuremenets = ''
     unique_reflections = ''
     Wilson_B_factor = ''
+    
+    is_checked = False
+    line_for_checking = 'B ='
+    
+    while not(is_checked):
+        with open(filename) as f:
+            is_checked = next((l for l in f if line_for_checking in l), None)
+        time.sleep(5.)
+    
     with open(filename, 'r') as file:
         for line in file:
             
             if line.startswith('Overall CC* = '):
                 CCstar = re.search(r'\d+\.\d+',line).group(0)
+                CCstar = str(round(float(CCstar),3))
             if line.startswith('Overall Rsplit = '):
                 Rsplit = re.search(r'\d+\.\d+',line).group(0)
+                Rsplit = str(round(float(Rsplit),3))
             if line.startswith('Overall CC = '):
                 CC = re.search(r'\d+\.\d+',line).group(0)
+                CC = str(round(float(CC),3))
+            if line.startswith('Overall CCano = '):
+                CCano = re.search(r'\d+\.\d+',line).group(0)
+                CCano = str(round(float(CCano),3)) if len(CCano) > 0 else ''           
             if line.startswith('Fixed resolution range: '):
                 resolution = line[line.find("(")+1:line.find(")")].replace('to','-').replace('Angstroms','').strip()
+                
             if ' measurements in total.' in line:
                 total_measuremenets = re.search(r'\d+', line).group(0)
             if ' reflections in total.' in line:
                 unique_reflections = re.search(r'\d+', line).group(0)
             if line.startswith('Overall <snr> ='):
                 snr = re.search(r'\d+\.\d+',line).group(0)
+                snr = str(round(float(snr),3))
             if line.startswith('Overall redundancy ='):
-                multiplicity = re.search(r'\d+\.\d+',line).group(0)                
+                multiplicity = re.search(r'\d+\.\d+',line).group(0)
+                multiplicity = str(round(float(multiplicity),3))
             if line.startswith('Overall completeness ='):
                 completeness = re.search(r'\d+\.\d+',line).group(0)
+                completeness = str(round(float(completeness),3))
             if line.startswith('B ='):
                 Wilson_B_factor = re.search(r'\d+\.\d+',line).group(0) if re.search(r'\d+\.\d+',line) is not None else ''
+                Wilson_B_factor = str(round(float(Wilson_B_factor),3)) if len(Wilson_B_factor) > 0 else ''
     
     shell, CCstar_shell, Rsplit_shell, CC_shell, max_shell, min_shell, SNR_shell, Completeness_shell, unique_refs_shell, multiplicity_shell = outer_shell(CCstar_dat_file)
     
@@ -297,7 +316,9 @@ def calculating_max_res_from_Rsplit_CCstar_dat(CCstar_dat_file, Rsplit_dat_file)
     return resolution
 
 def processing(CCstar_dat_file, error_filename_to_parse):
-
+    global Rwork
+    global Rfree
+    global resolution_cut_off
     name_of_run = os.path.basename(CCstar_dat_file).split(".")[0].replace("_CCstar","")
     data_info[name_of_run] = {i:'' for i in indexes}
     
@@ -310,7 +331,9 @@ def processing(CCstar_dat_file, error_filename_to_parse):
         
     data_info[name_of_run]['Num. patterns/hits'] = str(chunks)+"/"+str(hits)
     data_info[name_of_run]['Indexed patterns/crystals'] = str(indexed_patterns)+"/"+str(indexed)
-        
+    data_info[name_of_run]['Rfree/Rwork'] = str(Rfree)+"/"+str(Rwork)    
+    data_info[name_of_run]['Refinement resolution cut-off'] = str(resolution_cut_off)  
+    
     parse_err(name_of_run, error_filename_to_parse, CCstar_dat_file)
 
 
@@ -331,7 +354,7 @@ def parsing_phenix_log_file(phenix_log_file):
     if len(result) == 0:
         return float(Rwork), float(Rfree), None
     resolution_cut_off = min(list(map(lambda x: float(x), result[0])))
-    
+    resolution_cut_off = round(float(resolution_cut_off),3)
     return Rwork, Rfree, resolution_cut_off
 
 def get_UC(hkl_input_file):
@@ -362,6 +385,7 @@ if __name__ == "__main__":
     output = args.output
     Rfree_Rwork_path = args.a
     nsh = args.nshells
+    Rwork, Rfree, resolution_cut_off = '', '', ''
     if args.f is not None:
         with open(args.f, 'r') as file:
             for line in file:
