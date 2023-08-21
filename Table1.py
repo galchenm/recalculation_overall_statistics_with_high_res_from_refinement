@@ -407,7 +407,7 @@ if __name__ == "__main__":
                     
                     CCstar_dat_file, error_filename_to_parse = run_partialator(hkl_input_file, resolution_cut_off, pg, pdb, nsh)
                     
-                    while CCstar_dat_file is not None and error_filename_to_parse is not None and not(os.path.exists(CCstar_dat_file)) and not(os.path.exists(error_filename_to_parse)):
+                    while not(os.path.exists(CCstar_dat_file)) and not(os.path.exists(error_filename_to_parse)):
                         time.sleep(5.0)
                     
                     if CCstar_dat_file is not None and error_filename_to_parse is not None:
@@ -435,7 +435,7 @@ if __name__ == "__main__":
                 
                 CCstar_dat_file, error_filename_to_parse = run_partialator(hkl_input_file, resolution_cut_off, pg, pdb, nsh)
                 
-                while CCstar_dat_file is not None and error_filename_to_parse is not None and not(os.path.exists(CCstar_dat_file)) and not(os.path.exists(error_filename_to_parse)):
+                while not(os.path.exists(CCstar_dat_file)) and not(os.path.exists(error_filename_to_parse)):
                     time.sleep(5.0)
                 
                 if CCstar_dat_file is not None and error_filename_to_parse is not None:
