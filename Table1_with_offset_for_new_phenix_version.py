@@ -242,7 +242,7 @@ def wait_for_line(filename, line_for_checking, max_attempts=10, delay=2.0):
 
 def parse_err(data_info, name_of_run, filename, CCstar_dat_file):
     global is_extended
-    print(220)
+
     resolution = ''
     Rsplit = ''
     CC = ''
@@ -282,7 +282,6 @@ def parse_err(data_info, name_of_run, filename, CCstar_dat_file):
                 CCano = str(round(float(CCano),4)) if len(CCano) > 0 else ''           
             if line.startswith('Fixed resolution range: '):
                 resolution = line[line.find("(")+1:line.find(")")].replace('to','-').replace('Angstroms','').strip()
-                print(261)
             if ' measurements in total.' in line:
                 total_measuremenets = re.search(r'\d+', line).group(0)
             if ' reflections in total.' in line:
@@ -481,7 +480,6 @@ def parse_UC_file(UC_file):
     if UC_file.endswith('pdb'):
         return parse_cryst1_from_pdb(UC_file)
     else:
-        print(461)
         # Regular expressions to capture the unit cell parameters
         pattern = r"a = ([\d.]+) A.*?b = ([\d.]+) A.*?c = ([\d.]+) A.*?al = ([\d.]+) deg.*?be = ([\d.]+) deg.*?ga = ([\d.]+) deg"
         
@@ -525,12 +523,11 @@ def processing(input_tuple):
 
     # Get the unit cell file path
     UC_file = get_UC(hkl_name)
-    print('UC_file = ', UC_file)
+
     # Check if the file exists in the original location
     if not os.path.exists(UC_file):
         # Check if the file exists in the same directory as `hkl_name`
         potential_path = os.path.join(os.path.dirname(hkl_name), os.path.basename(UC_file))
-        print('potential_path = ', potential_path)
         if os.path.exists(potential_path):
             UC_file = potential_path
         else:
@@ -540,7 +537,6 @@ def processing(input_tuple):
     if cell_path is not None:
         # Attempt to replace the extension with '.cell'
         cell_path_file = os.path.join(cell_path, os.path.basename(hkl_name).replace('hkl', 'cell'))
-        print('cell_path_file = ', cell_path_file)
         if os.path.exists(cell_path_file):
             
             UC_file = cell_path_file
@@ -645,7 +641,6 @@ def prep_for_calculating_overall_statistics(input_prior_information):
     if not os.path.exists(pdb):
         # Check if the file exists in the same directory as `hkl_input_file`
         potential_path = os.path.join(os.path.dirname(hkl_input_file), os.path.basename(pdb))
-        print('potential_path = ', potential_path)
         if os.path.exists(potential_path):
             pdb = potential_path
         else:
@@ -655,7 +650,7 @@ def prep_for_calculating_overall_statistics(input_prior_information):
     if cell_path is not None:
         # Attempt to replace the extension with '.cell'
         cell_path_file = os.path.join(cell_path, os.path.basename(hkl_input_file).replace('hkl', 'cell'))
-        print('cell_path_file = ', cell_path_file)
+
         if os.path.exists(cell_path_file):
             
             pdb = cell_path_file
