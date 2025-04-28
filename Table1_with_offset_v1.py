@@ -146,6 +146,9 @@ def parse_err(data_info, name_of_run, filename, CCstar_dat_file):
     unique_reflections = ''
     Wilson_B_factor = ''
     
+    SNR_dat_file = CCstar_dat_file.replace("CCstar","SNR")
+    CC_dat_file = CCstar_dat_file.replace("CCstar","CC")
+    
     is_checked = False
     line_for_checking = 'B ='
     
@@ -202,7 +205,10 @@ def parse_err(data_info, name_of_run, filename, CCstar_dat_file):
     data_info[name_of_run]['Total Measurements'] =  total_measuremenets
     data_info[name_of_run]['Unique Reflections'] =  unique_reflections  + f' ({unique_refs_shell})'
     data_info[name_of_run]['Wilson B-factor'] = Wilson_B_factor
-    
+
+    data_info[name_of_run]['Resolution CC>=0.3'] = str(get_d_at_cc_threshold(CC_dat_file))
+    data_info[name_of_run]['Resolution SNR=1'] = str(get_d_at_snr_one(SNR_dat_file))
+
     return data_info    
 
 def outer_shell(CCstar_dat_file):
@@ -346,6 +352,83 @@ def processing(input_tuple):
     data_info = parse_err(data_info, name_of_run, error_filename_to_parse, CCstar_dat_file)
     return data_info
 
+def get_d_at_snr_one(file_path):
+    """Get resolution at SNR=1 using linear interpolation, handling non-monotonic SNR data."""
+    data = []
+    
+    # Read data from file
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+        for line in lines[1:]:
+            parts = line.split()
+            if len(parts) < 9:
+                continue
+            try:
+                snr = float(parts[6])
+                d_value = float(parts[8])
+                data.append((snr, d_value))
+            except ValueError:
+                continue
+
+    # Filter only monotonically decreasing SNR
+    filtered_data = []
+    for i, (snr, d_value) in enumerate(data):
+        if i == 0 or snr < filtered_data[-1][0]:  # SNR must decrease
+            filtered_data.append((snr, d_value))
+
+    # Find d(A) at SNR=1 using linear interpolation
+    for i in range(len(filtered_data) - 1):
+        snr1, d1 = filtered_data[i]
+        snr2, d2 = filtered_data[i + 1]
+        if snr1 == 1.0:
+            return d1
+        if snr1 > 1.0 > snr2:  # Interpolate
+            return round(d1 + (d2 - d1) * (1.0 - snr1) / (snr2 - snr1), 3)
+
+    return None  # Return None if SNR=1 not found or data insufficient
+
+
+def get_d_at_cc_threshold(file_path, target_cc=0.3):
+    """
+    Parse the file and return the d(A) value corresponding to a specific CC value using linear interpolation if needed.
+
+    :param file_path: Path to the CC.dat file.
+    :param target_cc: The CC value for which d(A) is required. Default is 0.3.
+    :return: The d(A) value corresponding to the target CC.
+    """
+    with open(file_path, 'r') as file:
+        lines = file.readlines()
+
+    # Skip the header and parse the rows
+    data = []
+    for line in lines[1:]:  # Skip the header
+        parts = line.split()
+        if len(parts) < 5:  # Ensure there are enough columns
+            continue
+        try:
+            cc = float(parts[1])  # CC column
+            d_value = float(parts[3])  # d(A) column
+            data.append((cc, d_value))
+        except ValueError:
+            continue
+
+    # Filter only monotonically decreasing CC values
+    filtered_data = []
+    for i, (cc, d_value) in enumerate(data):
+        if i == 0 or cc < filtered_data[-1][0]:  # CC must decrease
+            filtered_data.append((cc, d_value))
+
+    # Find the exact or interpolate for the target CC
+    for i in range(len(filtered_data) - 1):
+        cc1, d1 = filtered_data[i]
+        cc2, d2 = filtered_data[i + 1]
+        
+        if cc1 == target_cc:  # Exact match
+            return d1
+        if cc1 > target_cc > cc2:  # Interpolation
+            # Linear interpolation formula: d = d1 + (d2 - d1) * (target_cc - cc1) / (cc2 - cc1)
+            return round(d1 + (d2 - d1) * (target_cc - cc1) / (cc2 - cc1), 3)
+    return None  # Return None if target CC is out of range
 
 def parsing_phenix_log_file(phenix_log_file):
     file = open(phenix_log_file, 'r')
