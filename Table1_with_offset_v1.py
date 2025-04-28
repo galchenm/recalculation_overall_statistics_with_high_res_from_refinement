@@ -17,7 +17,9 @@ import concurrent.futures
 
 
 os.nice(0)
-indexes = ['Num. patterns/hits', 'Indexed patterns/crystals', 'CC* intersects with Rsplit at', 'Resolution', 'Rsplit (%)', 'CC1/2', 'CC*', 'CCano', 'SNR', 'Completeness (%)', 'Multiplicity','Total Measurements' ,'Unique Reflections', 'Wilson B-factor', 'Rfree/Rwork', 'Refinement resolution cut-off']
+
+indexes = ['Num. patterns/hits', 'Indexed patterns/crystals', 'Resolution', 'Rsplit(%)', 'CC1/2', 'CC*', 'CCano', 'SNR', 'Completeness(%)', 'Multiplicity','Total Measurements' ,'Unique Reflections', 'Wilson B-factor', 'Resolution SNR=1', 'Resolution CC>=0.3', 'a,b,c,alpha,betta,gamma']
+
 
 x_arg_name = 'd'
 y_arg_name = 'CC*'
@@ -41,7 +43,9 @@ def parse_cmdline_args():
     parser.add_argument('-p','--p', type=str, help='Pattern in filename or path')
     parser.add_argument('-a','--a', type=str, help='Additional path with Rfree/Rwork')
     parser.add_argument('-n', '--nshells', default=10, type=int,  help="Number of shells")
+    parser.add_argument('-c', '--cell', type=str, help='Path to the folder with cell/pdb files. Check that naming is the same as hkl files!')
     parser.add_argument('-offset', '--offset', default=None, nargs='+', type=float, help="Value/s for offset parameter for resolution [Angstrom]")
+    parser.add_argument('--e', action="store_true", help='Use this flag if you want to get an extended version of results')
     return parser.parse_args()
 
 
@@ -134,6 +138,9 @@ def run_partialator(hkl_input_file, highres, pg, pdb, nsh=10, suffix=''):
         return None, None
 
 def parse_err(data_info, name_of_run, filename, CCstar_dat_file):
+
+    global is_extended
+
     resolution = ''
     Rsplit = ''
     CC = ''
@@ -195,12 +202,12 @@ def parse_err(data_info, name_of_run, filename, CCstar_dat_file):
     shell, CCstar_shell, Rsplit_shell, CC_shell, max_shell, min_shell, SNR_shell, Completeness_shell, unique_refs_shell, multiplicity_shell = outer_shell(CCstar_dat_file)
     
     data_info[name_of_run]['Resolution'] = resolution + f' ({max_shell} - {min_shell})'
-    data_info[name_of_run]['Rsplit (%)'] = Rsplit + f' ({Rsplit_shell})'
+    data_info[name_of_run]['Rsplit(%)'] = Rsplit + f' ({Rsplit_shell})'
     data_info[name_of_run]['CC1/2'] =  CC + f' ({CC_shell})'
     data_info[name_of_run]['CC*'] = CCstar  + f' ({CCstar_shell})'
     data_info[name_of_run]['CCano'] = CCano
     data_info[name_of_run]['SNR'] =  snr  + f' ({SNR_shell})'
-    data_info[name_of_run]['Completeness (%)'] = completeness  + f' ({Completeness_shell})'
+    data_info[name_of_run]['Completeness(%)'] = completeness  + f' ({Completeness_shell})'
     data_info[name_of_run]['Multiplicity'] =  multiplicity  + f' ({multiplicity_shell})'
     data_info[name_of_run]['Total Measurements'] =  total_measuremenets
     data_info[name_of_run]['Unique Reflections'] =  unique_reflections  + f' ({unique_refs_shell})'
@@ -209,6 +216,24 @@ def parse_err(data_info, name_of_run, filename, CCstar_dat_file):
     data_info[name_of_run]['Resolution CC>=0.3'] = str(get_d_at_cc_threshold(CC_dat_file))
     data_info[name_of_run]['Resolution SNR=1'] = str(get_d_at_snr_one(SNR_dat_file))
 
+    if is_extended:
+        data_info[name_of_run]['Resolution_overall'] = resolution
+        data_info[name_of_run]['Rsplit(%)_overall'] = Rsplit 
+        data_info[name_of_run]['CC1/2_overall'] =  CC 
+        data_info[name_of_run]['CC*_overall'] = CCstar  
+        data_info[name_of_run]['SNR_overall'] =  snr  
+        data_info[name_of_run]['Completeness(%)_overall'] = completeness 
+        data_info[name_of_run]['Multiplicity_overall'] =  multiplicity  
+        data_info[name_of_run]['Unique Reflections_overall'] =  unique_reflections
+
+        data_info[name_of_run]['Resolution_outer_shell'] =  f'{max_shell} - {min_shell}'
+        data_info[name_of_run]['Rsplit(%)_outer_shesll'] =  f'{Rsplit_shell}'
+        data_info[name_of_run]['CC1/2_outer_shell'] =  f'{CC_shell}'
+        data_info[name_of_run]['CC*_outer_shell'] = f'{CCstar_shell}'
+        data_info[name_of_run]['SNR_outer_shell'] =  f'{SNR_shell}'
+        data_info[name_of_run]['Completeness(%)_outer_shell'] = f'{Completeness_shell}'
+        data_info[name_of_run]['Multiplicity_outer_shell'] =  f'{multiplicity_shell}'
+        data_info[name_of_run]['Unique_Reflections_outer_shell'] =  f'{unique_refs_shell}'
     return data_info    
 
 def outer_shell(CCstar_dat_file):
@@ -327,7 +352,63 @@ def calculating_max_res_from_Rsplit_CCstar_dat(CCstar_dat_file, Rsplit_dat_file)
     resolution = round(0.98*(b2-b1)/(k1-k2),3)
     return resolution
 
+def parse_cryst1_from_pdb(file_path):
+    # Regular expression to match the CRYST1 line and capture the parameters
+    pattern = r"CRYST1\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)"
+    
+    # Open and read the PDB file
+    with open(file_path, 'r') as file:
+        for line in file:
+            # Search for the CRYST1 line
+            if line.startswith("CRYST1"):
+                # Match and capture the unit cell parameters
+                match = re.match(pattern, line.strip())
+                if match:
+                    # Extract the values from the match
+                    a = float(match.group(1))
+                    b = float(match.group(2))
+                    c = float(match.group(3))
+                    alpha = float(match.group(4))
+                    beta = float(match.group(5))
+                    gamma = float(match.group(6))
+                    
+                    return a, b, c, alpha, beta, gamma
+    # If no CRYST1 line is found
+    raise ValueError("No CRYST1 line found in the provided PDB file.")
+
+def parse_UC_file(UC_file):
+    if UC_file.endswith('pdb'):
+        return parse_cryst1_from_pdb(UC_file)
+    else:
+        # Regular expressions to capture the unit cell parameters
+        pattern = r"a = ([\d.]+) A.*?b = ([\d.]+) A.*?c = ([\d.]+) A.*?al = ([\d.]+) deg.*?be = ([\d.]+) deg.*?ga = ([\d.]+) deg"
+        
+        # Read the content of the file
+        with open(UC_file, 'r') as file:
+            file_content = file.read()
+
+        # Search for the pattern in the file content
+        match = re.search(pattern, file_content, re.DOTALL)
+
+        if match:
+            # Extract values from the match
+            a = float(match.group(1))
+            b = float(match.group(2))
+            c = float(match.group(3))
+            al = float(match.group(4))
+            be = float(match.group(5))
+            ga = float(match.group(6))
+            return a, b, c, al, be, ga
+        else:
+            raise ValueError("Unit cell parameters not found in the provided file.")
+            return None, None, None, None, None, None
+
+
 def processing(input_tuple):
+    global is_extended
+    global cell_path
+
+
     data_info = defaultdict(dict)
     CCstar_dat_file, error_filename_to_parse, Rwork, Rfree, resolution_cut_off = input_tuple
     name_of_run = os.path.basename(CCstar_dat_file).split(".")[0].replace("_CCstar","")
@@ -340,6 +421,33 @@ def processing(input_tuple):
         time.sleep(5)
     while os.stat(Rsplit_dat_file).st_size == 0:
         time.sleep(5)
+    
+    hkl_name = CCstar_dat_file.replace("_CCstar.dat",".hkl") if "_offset_" not in CCstar_dat_file else CCstar_dat_file.split("_offset_")[0]+'.hkl'
+
+    # Get the unit cell file path
+    UC_file = get_UC(hkl_name)
+
+    # Check if the file exists in the original location
+    if not os.path.exists(UC_file):
+        # Check if the file exists in the same directory as `hkl_name`
+        potential_path = os.path.join(os.path.dirname(hkl_name), os.path.basename(UC_file))
+        if os.path.exists(potential_path):
+            UC_file = potential_path
+        else:
+            UC_file = None
+
+    # Adjust the path if `cell_path` is provided
+    if cell_path is not None:
+        # Attempt to replace the extension with '.cell'
+        cell_path_file = os.path.join(cell_path, os.path.basename(hkl_name).replace('hkl', 'cell'))
+        if os.path.exists(cell_path_file):
+            
+            UC_file = cell_path_file
+        else:
+            # Fallback to replacing the extension with '.pdb'
+            pdb_path_file = os.path.join(cell_path, hkl_name.replace('hkl', 'pdb'))
+            UC_file = pdb_path_file if os.path.exists(pdb_path_file) else None
+
     data_info[name_of_run]['CC* intersects with Rsplit at'] = f'{calculating_max_res_from_Rsplit_CCstar_dat(CCstar_dat_file, Rsplit_dat_file)}'
     
     stream = CCstar_dat_file.replace("_CCstar.dat",".stream") if "_offset_" not in CCstar_dat_file else CCstar_dat_file.split("_offset_")[0]+'.stream'
@@ -350,6 +458,28 @@ def processing(input_tuple):
     data_info[name_of_run]['Rfree/Rwork'] = str(Rfree)+"/"+str(Rwork)    
     data_info[name_of_run]['Refinement resolution cut-off'] = str(resolution_cut_off)  
     data_info = parse_err(data_info, name_of_run, error_filename_to_parse, CCstar_dat_file)
+
+    a, b, c, al, be, ga = (parse_UC_file(UC_file) if UC_file is not None else (None, None, None, None, None, None))
+    data_info[name_of_run]['a,b,c,alpha,betta,gamma'] = a, b, c, al, be, ga
+
+    if is_extended:
+        data_info[name_of_run]['UC_file'] = UC_file
+        data_info[name_of_run]['N_patterns'] = str(chunks)
+        data_info[name_of_run]['Indexed_patterns'] = str(indexed_patterns)
+        data_info[name_of_run]['N_hits'] = str(hits)
+        data_info[name_of_run]['Indexed_crystals'] = str(indexed)
+        data_info[name_of_run]['Rwork'] = str(Rwork) 
+        data_info[name_of_run]['Rfree'] = str(Rfree)
+
+        data_info[name_of_run]['a'] = a
+        data_info[name_of_run]['b'] = b
+        data_info[name_of_run]['c'] = c
+        data_info[name_of_run]['alpha'] = al
+        data_info[name_of_run]['betta'] = be 
+        data_info[name_of_run]['gamma'] = ga
+        data_info[name_of_run]['CC* intersects with Rsplit at'] = f'{calculating_max_res_from_Rsplit_CCstar_dat(CCstar_dat_file, Rsplit_dat_file)}'
+
+
     return data_info
 
 def get_d_at_snr_one(file_path):
@@ -492,7 +622,9 @@ if __name__ == "__main__":
     Rfree_Rwork_path = args.a
     nsh = args.nshells
     offsets = args.offset
-    
+    is_extended = args.e
+    cell_path = args.cell
+
     if offsets is None:
         offsets = [0.]
     else:
