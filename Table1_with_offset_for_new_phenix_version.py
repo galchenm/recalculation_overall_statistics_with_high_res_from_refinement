@@ -36,7 +36,7 @@ def parse_cmdline_args():
         description=sys.modules[__name__].__doc__,
         formatter_class=CustomFormatter)
     parser.add_argument('path_from', type=str, help="The path of folder/s that contain/s files")
-    parser.add_argument('output', type=str, help="Path to lists of files")
+    parser.add_argument('output', type=str, help="Path to file with final results")
     parser.add_argument('-f','--f', type=str, help='File with blocks')
     parser.add_argument('-p','--p', type=str, help='Pattern in filename or path')
     parser.add_argument('-c', '--cell', type=str, help='Path to the folder with cell/pdb files. Check that naming is the same as hkl files!')
@@ -647,7 +647,7 @@ def prep_for_calculating_overall_statistics(input_prior_information):
             pdb = None
 
     # Adjust the path if `cell_path` is provided
-    if cell_path is not None:
+    if cell_path is not None and not os.path.exists(pdb):
         # Attempt to replace the extension with '.cell'
         cell_path_file = os.path.join(cell_path, os.path.basename(hkl_input_file).replace('hkl', 'cell'))
 
