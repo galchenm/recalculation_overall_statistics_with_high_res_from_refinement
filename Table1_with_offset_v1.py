@@ -38,7 +38,7 @@ def parse_cmdline_args():
         description=sys.modules[__name__].__doc__,
         formatter_class=CustomFormatter)
     parser.add_argument('path_from', type=str, help="The path of folder/s that contain/s files")
-    parser.add_argument('output', type=str, help="Path to lists of files")
+    parser.add_argument('output', type=str, help="Path to file with final results")
     parser.add_argument('-f','--f', type=str, help='File with blocks')
     parser.add_argument('-p','--p', type=str, help='Pattern in filename or path')
     parser.add_argument('-a','--a', type=str, help='Additional path with Rfree/Rwork')
@@ -129,12 +129,12 @@ def run_partialator(hkl_input_file, highres, pg, pdb, nsh=10, suffix=''):
 
             command = f"python3 /gpfs/cfel/group/cxi/scratch/2020/EXFEL-2019-Schmidt-Mar-p002450/scratch/galchenm/scripts_for_work/plot_func/many_plots-upt-v2.py -i {data_output_name}_CCstar.dat -x '1/d' -y 'CC*' -o {data_output_name}.png -add_nargs {data_output_name}_Rsplit.dat -yad 'Rsplit/%' -x_lim_dw 1. -x_lim_up {max_dd} -t {data_output_name} -legend {data_output_name} >> output.err\n"
             fh.writelines(command)
-        #print(f'The {job_file} is going to be submitted')    
+            
         os.system("sbatch %s" % job_file)
         
         return "%s_CCstar.dat" % os.path.join(path, data_output_name), "%s.err" % os.path.join(path, data_output_name)
     else:
-        #print(f'You do not have hkl1 and/or hkl2 files for {hkl_input_file}')
+        print(f'You do not have hkl1 and/or hkl2 files for {hkl_input_file}')
         return None, None
 
 def parse_err(data_info, name_of_run, filename, CCstar_dat_file):
@@ -432,17 +432,21 @@ def processing(input_tuple):
         # Check if the file exists in the same directory as `hkl_name`
         potential_path = os.path.join(os.path.dirname(hkl_name), os.path.basename(UC_file))
         if os.path.exists(potential_path):
+
             UC_file = potential_path
         else:
             UC_file = None
 
     # Adjust the path if `cell_path` is provided
-    if cell_path is not None:
+    if cell_path is not None and not os.path.exists(UC_file):
         # Attempt to replace the extension with '.cell'
         cell_path_file = os.path.join(cell_path, os.path.basename(hkl_name).replace('hkl', 'cell'))
         if os.path.exists(cell_path_file):
-            
             UC_file = cell_path_file
+
+        elif os.path.exists(os.path.join(cell_path, os.path.basename(UC_file))):
+            UC_file = os.path.join(cell_path, os.path.basename(UC_file))
+           
         else:
             # Fallback to replacing the extension with '.pdb'
             pdb_path_file = os.path.join(cell_path, hkl_name.replace('hkl', 'pdb'))
@@ -564,7 +568,7 @@ def parsing_phenix_log_file(phenix_log_file):
     file = open(phenix_log_file, 'r')
     content = file.read()
     file.close()
-    p = re.compile("Final R-work = ([\+\-\d\.]*), R-free = ([\+\-\d\.]*)")
+    p = re.compile(r"Final R-work = ([\+\-\d\.]*), R-free = ([\+\-\d\.]*)")
     result = p.findall(content)
     
     if len(result) == 0:
@@ -572,7 +576,7 @@ def parsing_phenix_log_file(phenix_log_file):
     Rwork, Rfree = result[0]
     
     #Resolution range: 56.3397 1.70002
-    p = re.compile("Resolution range: ([\+\-\d\.]*) ([\+\-\d\.]*)")
+    p = re.compile(r"Resolution range: ([\+\-\d\.]*) ([\+\-\d\.]*)")
     result = p.findall(content)
     if len(result) == 0:
         return float(Rwork), float(Rfree), None
@@ -606,7 +610,7 @@ def prep_for_calculating_overall_statistics(input_prior_information):
     hkl_input_file = glob.glob(f'{main_path}/{pattern_in_hkl_input_filename}.hkl', recursive=True)
     if len(hkl_input_file) == 0:
         print(f'In {main_path} there is no hkl file associated with {phenix_log_file}')
-        pass
+        return (None, None)
     hkl_input_file = hkl_input_file[0]
     pdb = get_UC(hkl_input_file)
     pg = get_pg(hkl_input_file)
@@ -637,7 +641,6 @@ if __name__ == "__main__":
         with open(args.f, 'r') as file:
             runs = file.read().split('\n')
         
-        #print(runs)
         
         for run in runs:
             phenix_log_file = glob.glob(f'{Rfree_Rwork_path}/*{run.strip()}*/**/*.log', recursive=True)
@@ -646,24 +649,24 @@ if __name__ == "__main__":
             phenix_log_files.append(phenix_log_file)
        
         CC_dat_with_err_files_to_parse = []
-        #print(phenix_log_files)
+        
         with concurrent.futures.ProcessPoolExecutor() as executor:
             for phenix_log_file, tuple_information in zip(phenix_log_files, executor.map(parsing_phenix_log_file, phenix_log_files)):
                 Rwork, Rfree, resolution_cut_off = tuple_information
-                print(os.path.basename(phenix_log_file), resolution_cut_off)
+                
                 if resolution_cut_off is not None:
                     input_prior_information = list(map(lambda offset: (phenix_log_file, resolution_cut_off, offset), offsets))
                     with concurrent.futures.ProcessPoolExecutor() as executor2:
                         for tuple_information_CCstar_err_file in executor2.map(prep_for_calculating_overall_statistics, input_prior_information):
                             CCstar_dat_file, error_filename_to_parse = tuple_information_CCstar_err_file
-                            print(tuple_information_CCstar_err_file)
+                            
                             if CCstar_dat_file is None and error_filename_to_parse is None:
                                 continue
                             #CCstar_dat_file, error_filename_to_parse, Rwork, Rfree, resolution_cut_off
                             CCstar_err_file_Rflags_res_cut_off = (*tuple_information_CCstar_err_file, Rwork, Rfree, resolution_cut_off)
                             CC_dat_with_err_files_to_parse.append(CCstar_err_file_Rflags_res_cut_off)
                     
-        print(CC_dat_with_err_files_to_parse)
+        
         #check how many processes are pending in order not to submit
         pending_command = f'squeue -u {USER} -t pending'
         number_of_pending_processes = subprocess.check_output(shlex.split(pending_command)).decode('utf-8').strip().split('\n')
@@ -688,7 +691,7 @@ if __name__ == "__main__":
 
             #phenix_log_file = list(filter(lambda x: (args.p in x), phenix_log_file)) if args.p is not None else phenix_log_file
             phenix_log_files.append(phenix_log_file)
-        print(len(phenix_log_file))  
+        
         
         CC_dat_with_err_files_to_parse = []
 
@@ -710,16 +713,16 @@ if __name__ == "__main__":
         
         pending_command = f'squeue -u {USER} -t pending'
         number_of_pending_processes = subprocess.check_output(shlex.split(pending_command)).decode('utf-8').strip().split('\n')
-        print(number_of_pending_processes)
+        
         while len(number_of_pending_processes) > 2:
             time.sleep(15)
             pending_command = f'squeue -u {USER} -t pending'
             number_of_pending_processes = subprocess.check_output(shlex.split(pending_command)).decode('utf-8').strip().split('\n')
-            print(number_of_pending_processes)
+            
 
         time.sleep(55)
         existed_files_to_check = [ CC_dat_with_err_file for CC_dat_with_err_file in CC_dat_with_err_files_to_parse if os.path.exists(CC_dat_with_err_file[0]) and os.path.exists(CC_dat_with_err_file[1])]
-        print(len(existed_files_to_check))
+        
         
         #for CC_dat_with_err_file in existed_files_to_check:
         #    tmp_data_info = processing(CC_dat_with_err_file)
@@ -729,6 +732,6 @@ if __name__ == "__main__":
                 for name_of_run in result:
                     data_info_all[name_of_run] = result[name_of_run]         
         
-    print(len(data_info_all))           
+              
     df = pd.DataFrame.from_dict(data_info_all)
     df.to_csv(output, sep=';')
