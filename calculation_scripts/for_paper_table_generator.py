@@ -485,7 +485,7 @@ def processing(CCstar_dat_files, is_extended):
                 data_info[name_of_run]['mtz_command'] = ''
                 data_info[name_of_run]['mtz_with_the_defined_resolution'] = ''
         
-        ы
+        
 if __name__ == "__main__":
 
     args = parse_cmdline_args()
