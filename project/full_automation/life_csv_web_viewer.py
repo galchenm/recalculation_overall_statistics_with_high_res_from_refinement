@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+
+import subprocess
+import sys
+
+# === Ensure Flask is installed ===
+try:
+    import flask
+except ImportError:
+    print("[INFO] Flask not found. Installing...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "flask"])
+    import flask  # retry import after installation
+
+from flask import Flask, render_template_string, jsonify
+import argparse
+import csv
+import os
+
+app = Flask(__name__)
+CSV_PATH = ""
+
+HTML_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Live CSV Viewer</title>
+    <style>
+        body { font-family: sans-serif; padding: 1em; background: #f9f9f9; }
+        input { margin-bottom: 10px; padding: 5px; width: 300px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+        th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
+        th { background-color: #eee; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        #table-container { height: 70vh; overflow-y: auto; border: 1px solid #ccc; }
+    </style>
+</head>
+<body>
+    <h1>Live CSV Viewer</h1>
+    <input type="text" id="search" placeholder="Search..." onkeyup="filterTable()">
+    <div id="table-container">
+        <table id="csv-table">
+            <thead></thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <script>
+        function fetchCSV() {
+            fetch('/data')
+                .then(response => response.json())
+                .then(data => {
+                    const thead = document.querySelector("#csv-table thead");
+                    const tbody = document.querySelector("#csv-table tbody");
+
+                    // Clear current content
+                    thead.innerHTML = "";
+                    tbody.innerHTML = "";
+
+                    if (data.length === 0) return;
+
+                    // Header
+                    const headerRow = document.createElement("tr");
+                    Object.keys(data[0]).forEach(key => {
+                        const th = document.createElement("th");
+                        th.textContent = key;
+                        headerRow.appendChild(th);
+                    });
+                    thead.appendChild(headerRow);
+
+                    // Rows
+                    data.forEach(row => {
+                        const tr = document.createElement("tr");
+                        Object.values(row).forEach(val => {
+                            const td = document.createElement("td");
+                            td.textContent = val;
+                            tr.appendChild(td);
+                        });
+                        tbody.appendChild(tr);
+                    });
+
+                    autoScroll();
+                });
+        }
+
+        function autoScroll() {
+            const container = document.getElementById("table-container");
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function filterTable() {
+            const input = document.getElementById("search");
+            const filter = input.value.toLowerCase();
+            const rows = document.querySelectorAll("#csv-table tbody tr");
+
+            rows.forEach(row => {
+                const text = row.textContent.toLowerCase();
+                row.style.display = text.includes(filter) ? "" : "none";
+            });
+        }
+
+        setInterval(fetchCSV, 3000);  // Refresh every 3 seconds
+        window.onload = fetchCSV;
+    </script>
+</body>
+</html>
+"""
+
+@app.route('/')
+def index():
+    return render_template_string(HTML_TEMPLATE)
+
+@app.route('/data')
+def data():
+    rows = []
+    if os.path.isfile(CSV_PATH):
+        with open(CSV_PATH, newline='') as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+    return jsonify(rows)
+
+def main():
+    global CSV_PATH
+    parser = argparse.ArgumentParser(description="Live CSV Table Viewer")
+    parser.add_argument('--csv', required=True, help='Path to the CSV file to monitor')
+    parser.add_argument('--port', type=int, default=5000, help='Port to serve on (default: 5000)')
+    args = parser.parse_args()
+
+    CSV_PATH = args.csv
+    if not os.path.isfile(CSV_PATH):
+        print(f"[ERROR] CSV file not found at {CSV_PATH}")
+        return
+
+    print(f"Serving live view of '{CSV_PATH}' at http://localhost:{args.port}")
+    app.run(debug=False, use_reloader=False, port=args.port)
+
+if __name__ == '__main__':
+    main()
