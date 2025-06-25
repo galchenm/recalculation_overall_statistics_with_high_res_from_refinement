@@ -4,7 +4,7 @@ import time
 from collections import defaultdict
 
 from parsing_stream import parsing_stream
-from parsing_err_file import parse_err 
+from parsing_err_file import parse_err
 from parsing_UC_files import parse_UC_file
 from resolution_cutoff_determination import calculating_max_res_from_Rsplit_CCstar_dat
 from preparation_for_statistics_calculations import get_UC
@@ -18,42 +18,36 @@ indexes = [
     'Resolution SNR=1', 'Resolution CC>=0.3', 'a,b,c,alpha,betta,gamma'
 ]
 
-def processing(hkl_file, main_path, is_extended=False, cell_path=None, Rwork=None, Rfree=None,
-               resolution_cut_off_high=None, resolution_cut_off_low=None):
-    
-    data_info = defaultdict(dict)
-    name_of_run = os.path.basename(hkl_file).replace(".hkl", "")
+def processing_statistics_for_run(
+    name_of_run, data_info_for_the_current_run, hkl_file, main_path,
+    is_extended=False, cell_path=None, is_refining=False
+):
     print(f'Processing {name_of_run}')
-    
+    data_info = defaultdict(dict)
     data_info[name_of_run] = {key: '' for key in indexes}
-    
-    base = hkl_file.replace(".hkl", "")
-    CCstar_dat_file = f"{base}_CCstar.dat"
-    Rsplit_dat_file = CCstar_dat_file.replace("CCstar", "Rsplit")
-    SNR_dat_file = CCstar_dat_file.replace("CCstar", "SNR")
-    CC_dat_file = CCstar_dat_file.replace("CCstar", "CC")
 
-    stream_file = (CCstar_dat_file.replace("_CCstar.dat", ".stream")
-                   if "_offset_" not in CCstar_dat_file
-                   else CCstar_dat_file.split("_offset_")[0] + '.stream')
+    base, _ = os.path.splitext(hkl_file)
+    CCstar_dat_file = f"{base}_CCstar.dat"
+    Rsplit_dat_file = f"{base}_Rsplit.dat"
+    SNR_dat_file = f"{base}_SNR.dat"
+    CC_dat_file = f"{base}_CC.dat"
+    stream_file = f"{base}.stream" if "_offset_" not in base else base.split("_offset_")[0] + '.stream'
 
     # Locate UC file
     UC_file = get_UC(hkl_file)
-    if not os.path.exists(UC_file):
-        alt = os.path.join(os.path.dirname(hkl_file), os.path.basename(UC_file))
-        UC_file = alt if os.path.exists(alt) else None
+    if UC_file and not os.path.exists(UC_file):
+        alt_path = os.path.join(os.path.dirname(hkl_file), os.path.basename(UC_file))
+        UC_file = alt_path if os.path.exists(alt_path) else None
 
-    # Override with cell_path if applicable
     if cell_path:
         base_name = os.path.basename(hkl_file)
-        cell_file = os.path.join(cell_path, base_name.replace("hkl", "cell"))
-        pdb_file = os.path.join(cell_path, base_name.replace("hkl", "pdb"))
-        if os.path.exists(cell_file):
-            UC_file = cell_file
-        elif os.path.exists(pdb_file):
-            UC_file = pdb_file
+        for ext in ['cell', 'pdb']:
+            candidate = os.path.join(cell_path, base_name.replace("hkl", ext))
+            if os.path.exists(candidate):
+                UC_file = candidate
+                break
 
-    # Parse stream
+    # Parse stream file
     chunks, hits, indexed_patterns, indexed = parsing_stream(stream_file)
     data_info[name_of_run]['Num. patterns/hits'] = f"{chunks}/{hits}"
     data_info[name_of_run]['Indexed patterns/crystals'] = f"{indexed_patterns}/{indexed}"
@@ -62,7 +56,7 @@ def processing(hkl_file, main_path, is_extended=False, cell_path=None, Rwork=Non
     a, b, c, al, be, ga = parse_UC_file(UC_file) if UC_file else (None,) * 6
     data_info[name_of_run]['a,b,c,alpha,betta,gamma'] = (a, b, c, al, be, ga)
 
-    # Wait until required files exist and are non-empty
+    # Wait for required files
     for file_path in [Rsplit_dat_file, SNR_dat_file, CC_dat_file]:
         while not os.path.exists(file_path) or os.stat(file_path).st_size == 0:
             time.sleep(5)
@@ -72,27 +66,43 @@ def processing(hkl_file, main_path, is_extended=False, cell_path=None, Rwork=Non
     d_cc = get_d_at_cc_threshold(CC_dat_file)
     max_res = calculating_max_res_from_Rsplit_CCstar_dat(CCstar_dat_file, Rsplit_dat_file)
 
+    Rwork = data_info_for_the_current_run[name_of_run].get('Rwork', '')
+    Rfree = data_info_for_the_current_run[name_of_run].get('Rfree', '')
+    resolution_cut_off_high = data_info_for_the_current_run[name_of_run].get('resolution_cut_off_high', '')
+    resolution_cut_off_low = data_info_for_the_current_run[name_of_run].get('resolution_low', '')
+
+    if Rwork is None and is_refining:
+        print('Calling refinement...')
+        # Call refinement process here
+        pass
+
     data_info[name_of_run].update({
+        'Rwork/Rfree': f'{Rwork}/{Rfree}',
+        'Refinement resolution cut-off high': str(resolution_cut_off_high),
+        'Refinement resolution cut-off low': str(resolution_cut_off_low),
         'Resolution SNR=1': str(d_snr),
         'Resolution CC>=0.3': str(d_cc),
         'CC* intersects with Rsplit at': str(max_res)
     })
 
-    # Parse latest error file
-    err_files = glob.glob(
-        f'{main_path}/**/{os.path.basename(CCstar_dat_file).replace("_CCstar.dat", "*.err")}',
-        recursive=True
+    # Parse error file
+    err_pattern = os.path.join(
+        main_path, '**', os.path.basename(CCstar_dat_file).replace("_CCstar.dat", "*.err")
     )
+    err_files = glob.glob(err_pattern, recursive=True)
     if err_files:
         latest_err = max(err_files, key=os.path.getctime)
         data_info = parse_err(data_info, name_of_run, latest_err, CCstar_dat_file)
 
-    # Run get_hkl if UC_file exists
+    # Convert to MTZ if UC file exists
     mtz_file = hkl_file.replace("hkl", "mtz")
-    mtz_command = f'get_hkl -i {hkl_file} -p {UC_file} -o {mtz_file} --output-format=mtz | tee conversion_log.txt'
     if UC_file:
+        mtz_command = f'get_hkl -i {hkl_file} -p {UC_file} -o {mtz_file} --output-format=mtz | tee conversion_log.txt'
         os.system(mtz_command)
+    else:
+        mtz_command = ''
 
+    # Extended data
     if is_extended:
         data_info[name_of_run].update({
             'UC_file': UC_file,
@@ -102,11 +112,8 @@ def processing(hkl_file, main_path, is_extended=False, cell_path=None, Rwork=Non
             'Indexed_crystals': str(indexed),
             'a': a, 'b': b, 'c': c,
             'alpha': al, 'betta': be, 'gamma': ga,
-            'mtz_command': mtz_command if UC_file else '',
-            'mtz_with_the_defined_resolution': (
-                f"{mtz_file} {d_snr}" if UC_file and d_snr
-                else ''
-            )
+            'mtz_command': mtz_command,
+            'mtz_with_the_defined_resolution': f"{mtz_file} {d_snr}" if d_snr else ''
         })
 
     return data_info

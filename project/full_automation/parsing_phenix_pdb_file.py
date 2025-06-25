@@ -79,7 +79,7 @@ def parsing_phenix_log_file(phenix_log_file):
     return Rwork, Rfree, resolution_cut_off
 
 
-def parse_phenix_results(pdb_file=None, log_file=None):
+def parse_phenix_results(file):
     """
     Determine which Phenix output format to use and parse accordingly.
     
@@ -93,7 +93,14 @@ def parse_phenix_results(pdb_file=None, log_file=None):
     Raises:
         FileNotFoundError: If neither file is provided or found.
     """
-
+    if file.endswith('.pdb'):
+        pdb_file = file
+        log_file = None
+    elif file.endswith('.log'):
+        pdb_file = None
+        log_file = file
+    else:
+        raise ValueError("File must be either a .pdb or .log file.")
     # Try parsing from the PDB if provided
     if pdb_file and os.path.exists(pdb_file):
         with open(pdb_file, 'r') as f:
