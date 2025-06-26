@@ -26,7 +26,6 @@ HTML_TEMPLATE = """
     <title>Live CSV Viewer</title>
     <style>
         body { font-family: sans-serif; padding: 1em; background: #f9f9f9; }
-        input { margin-bottom: 10px; padding: 5px; width: 300px; }
         table { border-collapse: collapse; width: 100%; margin-top: 10px; }
         th, td { border: 1px solid #ccc; padding: 6px 10px; text-align: left; }
         th { background-color: #eee; }
@@ -36,7 +35,6 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <h1>Live CSV Viewer</h1>
-    <input type="text" id="search" placeholder="Search..." onkeyup="filterTable()">
     <div id="table-container">
         <table id="csv-table">
             <thead></thead>
@@ -87,17 +85,6 @@ HTML_TEMPLATE = """
             container.scrollTop = container.scrollHeight;
         }
 
-        function filterTable() {
-            const input = document.getElementById("search");
-            const filter = input.value.toLowerCase();
-            const rows = document.querySelectorAll("#csv-table tbody tr");
-
-            rows.forEach(row => {
-                const text = row.textContent.toLowerCase();
-                row.style.display = text.includes(filter) ? "" : "none";
-            });
-        }
-
         setInterval(fetchCSV, 3000);  // Refresh every 3 seconds
         window.onload = fetchCSV;
     </script>
@@ -114,8 +101,10 @@ def data():
     rows = []
     if os.path.isfile(CSV_PATH):
         with open(CSV_PATH, newline='') as f:
-            reader = csv.DictReader(f)
-            rows = list(reader)
+            reader = csv.DictReader(f, delimiter=';')
+            for row in reader:
+                clean_row = {k: (v if v is not None else "") for k, v in row.items()}
+                rows.append(clean_row)
     return jsonify(rows)
 
 def main():
