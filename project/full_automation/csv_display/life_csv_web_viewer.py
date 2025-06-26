@@ -2,6 +2,9 @@
 
 import subprocess
 import sys
+import time
+import io
+import os
 
 # === Ensure Flask is installed ===
 try:
@@ -11,10 +14,17 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "flask"])
     import flask  # retry import after installation
 
+# === Ensure portalocker is installed for file locking ===
+try:
+    import portalocker
+except ImportError:
+    print("[INFO] portalocker not found. Installing...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "portalocker"])
+    import portalocker
+
 from flask import Flask, render_template_string, jsonify
 import argparse
 import csv
-import os
 
 app = Flask(__name__)
 CSV_PATH = ""
@@ -99,12 +109,26 @@ def index():
 @app.route('/data')
 def data():
     rows = []
-    if os.path.isfile(CSV_PATH):
-        with open(CSV_PATH, newline='') as f:
-            reader = csv.DictReader(f, delimiter=';')
-            for row in reader:
-                clean_row = {k: (v if v is not None else "") for k, v in row.items()}
-                rows.append(clean_row)
+    max_attempts = 3
+    attempt = 0
+
+    while attempt < max_attempts:
+        try:
+            if os.path.isfile(CSV_PATH):
+                with open(CSV_PATH, "r", newline='') as f:
+                    portalocker.lock(f, portalocker.LOCK_SH)  # Shared lock for reading
+                    content = f.read()
+                    portalocker.unlock(f)
+                    reader = csv.DictReader(io.StringIO(content), delimiter=';')
+                    for row in reader:
+                        clean_row = {k: (v if v is not None else "") for k, v in row.items()}
+                        rows.append(clean_row)
+            break
+        except (csv.Error, OSError) as e:
+            attempt += 1
+            time.sleep(0.2)  # brief pause before retry
+            if attempt == max_attempts:
+                print(f"[WARNING] Failed to read CSV after {max_attempts} attempts: {e}")
     return jsonify(rows)
 
 def main():
