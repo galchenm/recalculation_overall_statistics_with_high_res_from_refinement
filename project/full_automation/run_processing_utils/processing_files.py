@@ -3,13 +3,13 @@ import glob
 import time
 from collections import defaultdict
 
-from parsing_stream import parsing_stream
-from parsing_err_file import parse_err
-from parsing_UC_files import parse_UC_file
-from resolution_cutoff_determination import calculating_max_res_from_Rsplit_CCstar_dat
-from preparation_for_statistics_calculations import get_UC
-from get_SNR_resolution import get_d_at_snr_one
-from get_CC_threshold_resolution import get_d_at_cc_threshold
+from stream_utils.parsing_stream import parsing_stream
+from partialator_utils.parsing_err_file import parse_err
+from unit_cell_utils.parsing_UC_files import parse_UC_file
+from partialator_utils.resolution_cutoff_determination import calculating_max_res_from_Rsplit_CCstar_dat
+from run_processing_utils.preparation_for_statistics_calculations import get_UC
+from partialator_utils.resolution_cutoff_determination import get_d_at_snr_one, get_d_at_cc_threshold
+from refinement_utils.dimple import dimple_execution
 
 indexes = [
     'Num. patterns/hits', 'Indexed patterns/crystals', 'Resolution', 'Rsplit(%)',
@@ -73,8 +73,8 @@ def processing_statistics_for_run(
 
     if Rwork is None and is_refining:
         print('Calling refinement...')
-        # Call refinement process here
-        pass
+        Rwork, Rfree, resolution_cut_off_high, resolution_cut_off_low = dimple_execution(hkl_file, UC_file, max_res)
+
 
     data_info[name_of_run].update({
         'Rwork/Rfree': f'{Rwork}/{Rfree}',

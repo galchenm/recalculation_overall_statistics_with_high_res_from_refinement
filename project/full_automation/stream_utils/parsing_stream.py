@@ -1,4 +1,7 @@
 import subprocess
+from visualization_utils.avg_resolution_plot import avg_resolution_plot
+from visualization_utils.orientation_plot import orientation_plot
+from visualization_utils.detector_shift import detector_shift
 
 def parsing_stream(stream):
     """Parse a stream file to extract information about hits, chunks, indexed patterns, and indexed crystals.
@@ -35,5 +38,10 @@ def parsing_stream(stream):
         none_indexed_patterns = 0
 
     indexed_patterns = chunks - none_indexed_patterns
-
+    
+    #Generating plots
+    avg_resolution_plot(stream)
+    orientation_plot(stream)
+    detector_shift(stream)
+    
     return chunks, hits, indexed_patterns, indexed 

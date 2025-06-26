@@ -3,8 +3,10 @@ import re
 import glob
 import shlex
 import subprocess
-from partialator_execution import run_partialator
-
+from partialator_utils.partialator_execution import run_partialator
+from unit_cell_utils.parsing_UC_files import parse_UC_file
+from partialator_utils.resolution_cutoff_determination import get_d_at_snr_one, get_d_at_cc_threshold
+from refinment_utils.parsing_phenix_pdb_file import parsing_phenix_pdb_file
 
 def extract_first_match(pattern, filepath):
     try:
@@ -40,7 +42,7 @@ def get_resolution_cutoff_from_logs(hkl_name, Rfree_Rwork_path, run_name):
 
     phenix_file = find_latest_file(pdb_path) or find_latest_file(log_path)
     if phenix_file:
-        return (*parse_phenix_results(phenix_file), phenix_file)
+        return (*parsing_phenix_pdb_file(phenix_file), phenix_file)
     return (None, None, 1.5, None, None)
 
 

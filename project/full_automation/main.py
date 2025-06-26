@@ -15,15 +15,15 @@ import subprocess
 import shlex
 import time
 import concurrent.futures
-from preparation_for_statistics_calculation import prep_for_calculating_overall_statistics
-from partialator_execution import run_partialator
+from run_processing_utils.preparation_for_statistics_calculation import prep_for_calculating_overall_statistics
+from partialator_utils.partialator_execution import run_partialator
 
 
 os.nice(0)
 indexes = ['Num. patterns/hits', 'Indexed patterns/crystals', 'Resolution', 'Rsplit(%)', 'CC1/2', 'CC*', 'CCano', 'SNR', 'Completeness(%)', 'Multiplicity','Total Measurements' ,'Unique Reflections', 'Wilson B-factor', 'Resolution SNR=1', 'Resolution CC>=0.3', 'a,b,c,alpha,betta,gamma']
 
 USER='galchenm'
-
+SLEEP_TIME = 10
 data_info_all = defaultdict(dict)
 
 class CustomFormatter(argparse.RawDescriptionHelpFormatter,
@@ -67,7 +67,7 @@ def wait_for_jobs_to_finish():
         number_of_pending = subprocess.check_output(shlex.split(pending_command)).decode().strip().split('\n')
         if len(number_of_pending) <= 1:
             break
-        time.sleep(10)
+        time.sleep(SLEEP_TIME)
 
 
 def append_to_csv(data_dict, output_file):
@@ -195,7 +195,7 @@ if __name__ == "__main__":
                         append_to_csv(run_data, output)
                         data_info_all.update(run_data)
 
-                time.sleep(30)
+                time.sleep(SLEEP_TIME)
         except KeyboardInterrupt:
             print("Exiting online mode.")
 

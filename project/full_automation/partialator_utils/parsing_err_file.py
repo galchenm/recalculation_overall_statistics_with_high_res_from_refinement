@@ -1,12 +1,14 @@
 import os
 import re
 import time
-from resolution import get_d_at_cc_threshold, get_d_at_snr_one
-from parsing_stream import parse_stream
-
-import os
-import time
-import re
+from partialator_utils.resolution_cutoff_determination import get_d_at_snr_one, get_d_at_cc_threshold
+from stream_utils.parsing_stream import parse_stream
+from partialator_utils.wait_for_file import wait_for_line
+from collections import defaultdict
+from partialator_utils.resolution_cutoff_determination import calculating_max_res_from_Rsplit_CCstar_dat
+from partialator_utils.resolution_cutoff_determination import get_UC
+from partialator_utils.wait_for_file import wait_for_file
+from unit_cell_utils.parsing_UC_files import parse_UC_file
 
 def outer_shell(CCstar_dat_file, is_extended=False):
     """
