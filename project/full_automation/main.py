@@ -243,5 +243,5 @@ if __name__ == "__main__":
                 run_name, {run_name: item['data']},
                 item['hkl_file'], main_path, is_extended, cell_path, is_refining)
             data_info_all.update(run_data)
-
+        data_info_all = data_info_all.T
         write_to_csv(data_info_all, output)

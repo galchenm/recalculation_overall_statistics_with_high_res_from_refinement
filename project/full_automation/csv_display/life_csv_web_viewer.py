@@ -131,6 +131,21 @@ def data():
                 print(f"[WARNING] Failed to read CSV after {max_attempts} attempts: {e}")
     return jsonify(rows)
 
+def wait_for_file(csv_path, timeout_hours=6, check_interval=2):
+    timeout_seconds = timeout_hours * 3600
+    start_time = time.time()
+
+    print(f"[INFO] Waiting for file: {csv_path}")
+
+    while not os.path.isfile(csv_path):
+        elapsed = time.time() - start_time
+        if elapsed > timeout_seconds:
+            print(f"[ERROR] File not found at {csv_path} after {timeout_hours} hours. Exiting.")
+            sys.exit(1)
+        time.sleep(check_interval)  # check every 30 seconds
+
+    print(f"[INFO] File found: {csv_path}")
+
 def main():
     global CSV_PATH
     parser = argparse.ArgumentParser(description="Live CSV Table Viewer")
@@ -139,9 +154,8 @@ def main():
     args = parser.parse_args()
 
     CSV_PATH = args.csv
-    if not os.path.isfile(CSV_PATH):
-        print(f"[ERROR] CSV file not found at {CSV_PATH}")
-        return
+    print(157)
+    wait_for_file(csv_path=CSV_PATH)
 
     print(f"Serving live view of '{CSV_PATH}' at http://localhost:{args.port}")
     app.run(debug=False, use_reloader=False, port=args.port)
