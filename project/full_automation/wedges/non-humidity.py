@@ -7,8 +7,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Optional, Tuple
 
-LIMIT_FOR_RESERVED_NODES = 25
-
+LIMIT_FOR_RESERVED_NODES = 1000
+SLEEP_TIME = 15  # seconds
 
 def are_the_reserved_nodes_overloaded(node_list: str) -> bool:
     """
@@ -36,9 +36,9 @@ def xscale_inp_generating(
     """
     Generate XSCALE.INP in current_data_processing_folder.
     The parameters must already be full XSCALE lines, e.g.:
-      space_group_number="SPACE_GROUP_NUMBER=96"
-      unit_cell_constants="UNIT_CELL_CONSTANTS=a b c alpha beta gamma"
-      reference_dataset="REFERENCE_DATA_SET=path/to/reference.mtz" or "!REFERENCE_DATA_SET"
+    space_group_number="SPACE_GROUP_NUMBER=96"
+    unit_cell_constants="UNIT_CELL_CONSTANTS=a b c alpha beta gamma"
+    reference_dataset="REFERENCE_DATA_SET=path/to/reference.mtz" or "!REFERENCE_DATA_SET"
     """
     xds_ascii_files = glob.glob(os.path.join(input_path, "**", "XDS_ASCII.HKL"), recursive=True)
     if not xds_ascii_files:
@@ -83,8 +83,8 @@ def read_and_average_gxparm(input_path: str) -> Tuple[Optional[int], Optional[Tu
     """
     Reads all GXPARM.XDS files under input_path.
     Returns:
-      - most frequent space group number (mode),
-      - average unit cell (a,b,c,alpha,beta,gamma) computed ONLY over files with that SG.
+        - most frequent space group number (mode),
+        - average unit cell (a,b,c,alpha,beta,gamma) computed ONLY over files with that SG.
     """
     sg_list = []
     uc_list_by_sg = {}
@@ -204,6 +204,8 @@ def main():
     if "maxwell" in reserved_nodes:
         login_node = None  # local submit on maxwell
 
+    while not os.path.exists(input_path):
+        time.sleep(SLEEP_TIME)
     os.makedirs(current_data_processing_folder, exist_ok=True)
     os.chmod(current_data_processing_folder, 0o755)
 

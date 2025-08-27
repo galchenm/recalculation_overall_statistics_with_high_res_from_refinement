@@ -1,357 +1,331 @@
 import os
 import sys
-import time
 import glob
+import shlex
+import subprocess
+import time
 import csv
-from datetime import datetime
-import re
+from typing import List, Dict
+from statistics import mean
+import numpy as np
+from pathlib import Path
 
-# 1 step
-def extract_cbf_files_modification_times(input_path: str, output_csv: str = 'file_mod_times.csv') -> str:
-    """
-    Reads a list of files from `input_path` and writes a CSV `output_csv` with
-    filename and last modification time (HH:MM).
-    """
-    files = glob.glob(os.path.join(input_path, "**", "*.cbf"), recursive=True)
+LIMIT_FOR_RESERVED_NODES = 1000
+SLEEP_TIME = 15  # seconds
 
+csv_header = ["POSITION", "Unit Cell a","Unit Cell b", "Unit Cell c", "Angle alpha", "Angle beta", "Angle gamma", "Space Group", "CC1/2", "R-meas", "R-pim", "R-merge"]
+
+def are_the_reserved_nodes_overloaded(node_list: str) -> bool:
+    """
+    Check if the reserved nodes are overloaded by counting running jobs.
+    Returns True if the number of jobs exceeds LIMIT_FOR_RESERVED_NODES.
+    """
+    try:
+        jobs_cmd = f'squeue -w {node_list}'
+        lines = subprocess.check_output(shlex.split(jobs_cmd)).decode().splitlines()
+        # squeue prints a header line; subtract it
+        job_count = max(0, len(lines) - 1)
+    except subprocess.CalledProcessError:
+        job_count = 0
+    return job_count > LIMIT_FOR_RESERVED_NODES
+
+def read_gxparm_xds(gxparm_xds_filepath: str) -> Tuple[Optional[int], Optional[Tuple[float, float, float, float, float, float]]]:
+    """
+    Reads a GXPARM.XDS file and extracts space group number and unit cell parameters.
+    Returns (space_group, (a,b,c,alpha,beta,gamma)) or (None, None) if not found.
+    """
+    with open(gxparm_xds_filepath, "r") as f:
+        for line in f:
+            parts = line.strip().split()
+            if len(parts) == 7:
+                try:
+                    sg = int(parts[0])
+                    a, b, c, alpha, beta, gamma = map(float, parts[1:])
+                    # Quick sanity check: positive cell edges
+                    if a > 0 and b > 0 and c > 0:
+                        return sg, (a, b, c, alpha, beta, gamma)
+                except ValueError:
+                    continue
+    return None, None
+
+def read_correct_lp_file(correct_lp_path: str):
+    # Extract CC/2, R-merge, R-meas, R-pim from CORRECT.LP
+    CChalf = Rmerge = Rmeas = Rpim = ""
+    if os.path.isfile(correct_lp_path):
+        with open(correct_lp_path, 'r') as lp:
+            lp_lines = lp.readlines()
+            for i, line in enumerate(lp_lines):
+                if "WILSON STATISTICS" in line:
+                    # Using relative line offsets based on Bash script
+                    try:
+                        CChalf = lp_lines[i-13].split()[10]
+                        Rmerge = lp_lines[i-13].split()[4]
+                        Rmeas = lp_lines[i-13].split()[12]
+                        Rpim = lp_lines[i-21].split()[9]
+                    except Exception:
+                        print("Error reading CORRECT.LP")
+                        return None, None, None, None
+                    break
+    return CChalf, Rmerge, Rmeas, Rpim
+
+from typing import List, Dict
+from statistics import mean
+
+def group_humidity_plateaus(humidity: List[float], temperatures: List[float], positions: List[int], tolerance: float = 0.5) -> Dict[float, Dict]:
+    groups: Dict[float, Dict] = {}
+    if not humidity:
+        return groups
+    
+    tolerance /= 100
+    
+    current_positions = [positions[0]]
+    current_humidities = [humidity[0]]
+    current_temperatures = [temperatures[0]]
+
+    for h, t, p in zip(humidity[1:], temperatures[1:], positions[1:]):
+        # Check if this humidity is within tolerance of the current group
+        if abs(h - mean(current_humidities)) <= tolerance:
+            current_positions.append(p)
+            current_humidities.append(h)
+            current_temperatures.append(t)
+        else:
+            # Finalize the current plateau
+            avg_hum = round(mean(current_humidities), 2)
+            groups[avg_hum] = {
+                "avg_temperature": mean(current_temperatures),
+                "positions": current_positions
+            }
+            # Start a new plateau
+            current_positions = [p]
+            current_humidities = [h]
+            current_temperatures = [t]
+
+    # Finalize the last plateau
+    avg_hum = round(mean(current_humidities), 2)
+    groups[avg_hum] = {
+        "avg_temperature": mean(current_temperatures),
+        "positions": current_positions
+    }
+
+    return groups
+
+def xscale_inp_generating(
+    input_path: str,
+    current_data_processing_folder: str,
+    space_group_number: str = "!SPACE_GROUP_NUMBER",
+    unit_cell_constants: str = "!UNIT_CELL_CONSTANTS",
+    reference_dataset: str = "!REFERENCE_DATA_SET",
+    xds_ascii_files: List[str] = [],
+    output_hkl: str = "output.hkl",
+) -> Path:
+    """
+    Generate XSCALE.INP in current_data_processing_folder.
+    The parameters must already be full XSCALE lines, e.g.:
+    space_group_number="SPACE_GROUP_NUMBER=96"
+    unit_cell_constants="UNIT_CELL_CONSTANTS=a b c alpha beta gamma"
+    reference_dataset="REFERENCE_DATA_SET=path/to/reference.mtz" or "!REFERENCE_DATA_SET"
+    """
+    xscale_inp = Path(current_data_processing_folder) / "XSCALE.INP"
+    header = (
+        f"{space_group_number}\n"
+        f"{unit_cell_constants}\n"
+        f"{reference_dataset}\n"
+        f"OUTPUT_FILE={output_hkl}\n"
+        f"FRIEDEL'S_LAW=TRUE"
+    )
+    with open(xscale_inp, "w") as f:
+        f.write(header + "\n")
+        for file in xds_ascii_files:
+            f.write(f"INPUT_FILE={file}\n")
+    return xscale_inp
+
+def read_info_txt(info_txt_file: str) -> Tuple[List[float], List[float], List[int]]:
+    pass
+
+def xscale_start(
+    current_data_processing_folder: str,
+    user: str,
+    reserved_nodes: str,
+    slurm_partition: str,
+    ssh_private_key_path: str,
+    ssh_public_key_path: str,  # currently unused; kept for interface compatibility
+    login_node: str | None = None,
+):
+    """Prepare and submit the XSCALE job (locally or via SSH)."""
+    os.chdir(current_data_processing_folder)
+    job_name = Path(current_data_processing_folder).name
+    slurmfile = Path(current_data_processing_folder) / f"{job_name}_XSCALE.sh"
+    err_file = Path(current_data_processing_folder) / f"{job_name}_XSCALE.err"
+    out_file = Path(current_data_processing_folder) / f"{job_name}_XSCALE.out"
+
+    def get_slurm_header(partition: str, reservation: str | None = None, extras: list[str] | None = None):
+        lines = [
+            "#!/bin/sh\n",
+            f"#SBATCH --job-name={job_name}\n",
+            f"#SBATCH --partition={partition}\n",
+            "#SBATCH --nodes=1\n",
+            f"#SBATCH --output={out_file}\n",
+            f"#SBATCH --error={err_file}\n",
+        ]
+        if reservation:
+            lines.append(f"#SBATCH --reservation={reservation}\n")
+        if extras:
+            lines.extend(extras)
+        return lines
+
+    def get_common_xscale_commands():
+        return [
+            "source /etc/profile.d/modules.sh\n",
+            "module load xray ccp4/7.1\n",
+            "xscale\n",
+        ]
+
+    sbatch_file: list[str] = []
+    ssh_command = ""
+
+    is_maxwell = "maxwell" in reserved_nodes
+    if is_maxwell:
+        slurm_extras = [
+            "#SBATCH --time=12:00:00\n",
+            "#SBATCH --nice=100\n",
+            "#SBATCH --mem=500000\n",
+        ]
+        sbatch_file += get_slurm_header("allcpu,upex,short", extras=slurm_extras)
+        sbatch_file += get_common_xscale_commands()
+    else:
+        reserved_nodes_overloaded = are_the_reserved_nodes_overloaded(reserved_nodes)
+        partition = slurm_partition if not reserved_nodes_overloaded else "allcpu,upex,short"
+        reservation = reserved_nodes if not reserved_nodes_overloaded else None
+        sbatch_file += get_slurm_header(partition, reservation)
+        sbatch_file += get_common_xscale_commands()
+
+        if login_node:
+            ssh_command = (
+                f"/usr/bin/ssh -o BatchMode=yes -o CheckHostIP=no "
+                f"-o StrictHostKeyChecking=no -o GSSAPIAuthentication=no "
+                f"-o GSSAPIDelegateCredentials=no -o PasswordAuthentication=no "
+                f"-o PubkeyAuthentication=yes -o PreferredAuthentications=publickey "
+                f"-o ConnectTimeout=10 -l {user} -i {ssh_private_key_path} {login_node}"
+            )
+
+    with open(slurmfile, "w") as fh:
+        fh.writelines(sbatch_file)
+    os.chmod(slurmfile, 0o755)
+
+    # NOTE: If ssh_command is set, slurmfile must exist at the same path on the remote host (shared FS).
+    submit_command = f'{ssh_command} "sbatch {slurmfile}"' if ssh_command else f"sbatch {slurmfile}"
+    subprocess.run(submit_command, shell=True, check=True)
+
+
+def main():
+    input_path = sys.argv[1]
+    current_data_processing_folder = sys.argv[2]
+    output_csv = os.path.join(current_data_processing_folder, "summary.csv")
+    
     with open(output_csv, 'w', newline='') as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(["Filename", "ModificationTime"])  # CSV header
-
-        for file_path in files:
-            if os.path.isfile(file_path):
-                filename = os.path.basename(file_path)
-                mod_time = datetime.fromtimestamp(os.path.getmtime(file_path)).strftime("%H:%M")
-                writer.writerow([filename, mod_time])
-            else:
-                print(f"Warning: '{file_path}' does not exist or is not a regular file")
-
-    return output_csv
-
-# 2 step
-def extract_shroud_temperatures_times(input_log_file: str, output_file: str):
-    """
-    Reads a log CSV with datetime and multiple values, extracts HH:MM from the first column,
-    keeps only the first 4 value columns, and writes a new CSV with a header.
-    """
-    if not os.path.isfile(input_log_file):
-        raise FileNotFoundError(f"Input file '{input_log_file}' not found.")
-
-    with open(input_log_file, 'r') as infile, open(output_file, 'w') as outfile:
-        # Write header
-        outfile.write("Time;Value1;Value2;Value3;Value4\n")
-
-        # Skip the first line (header)
-        next(infile)
-
-        for line in infile:
-            line = line.strip()
-            if not line:
-                continue  # skip empty lines
-
-            columns = line.split(';')
-            if len(columns) < 5:
-                continue  # skip lines that don't have enough columns
-
-            datetime_str = columns[0]  # e.g., "2025-05-02 23:38:48"
-            hh_mm = ":".join(datetime_str.split(' ')[1].split(':')[:2])
-
-            # Keep only first 4 value columns
-            values = columns[1:5]
-
-            # Write to output
-            outfile.write(f"{hh_mm};{';'.join(values)}\n")
-
-    return output_file
-
-# 3 step
-def filter_unique_times_from_log(input_file: str, output_file: str):
-    """
-    Reads a CSV with a header and 'HH:MM' times in the first column,
-    keeps only the first occurrence of each time, and writes to a new CSV.
-    """
-    if not os.path.isfile(input_file):
-        raise FileNotFoundError(f"Input file '{input_file}' not found.")
-
-    seen_times = set()
-
-    with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
-        # Read header
-        header = infile.readline()
-        outfile.write(header)
-
-        # Process remaining lines
-        for line in infile:
-            line = line.strip()
-            if not line:
-                continue  # skip empty lines
-
-            hh_mm = line.split(';')[0]
-            if hh_mm not in seen_times:
-                seen_times.add(hh_mm)
-                outfile.write(line + '\n')
-
-    return output_file
-
-# 4 step
-def mapping_files_with_humidity_level_temperature_via_timestamp(file1: str, file2: str, output_file: str):
-    """
-    Combines two CSV files based on matching times.
-
-    Args:
-        file1: CSV with "Filename, ModificationTime"
-        file2: CSV with "Time;Value1;Value2;Value3;Value4"
-        output_file: CSV to save combined results with "Filename, ModificationTime, Value1"
-    """
-    if not os.path.isfile(file1):
-        raise FileNotFoundError(f"Input file1 '{file1}' not found.")
-    if not os.path.isfile(file2):
-        raise FileNotFoundError(f"Input file2 '{file2}' not found.")
-
-    # Load file2 into a dictionary: Time -> Value1
-    time_to_value1 = {}
-    with open(file2, 'r') as f2:
-        reader = csv.reader(f2, delimiter=';')
-        for row in reader:
-            if not row or len(row) < 2:
-                continue
-            time_to_value1[row[0].strip()] = row[1].strip()
-
-    # Process file1 and write to output
-    with open(file1, 'r') as f1, open(output_file, 'w', newline='') as fout:
-        writer = csv.writer(fout)
-        writer.writerow(["Filename", "ModificationTime", "Value1"])
-
-        reader1 = csv.reader(f1)
-        for row in reader1:
-            if not row or len(row) < 2:
-                continue
-
-            filename = row[0].strip()
-            mod_time = row[1].strip()
-
-            value1 = time_to_value1.get(mod_time)
-            if value1:
-                writer.writerow([filename, mod_time, value1])
-            else:
-                print(f"Warning: No matching Time for {filename} with ModificationTime {mod_time}")
-
-    return output_file
-
-# 5 step. weird 
-def generate_crystal_csv(
-    search_directory,
-    csv_file,
-    search_term1="chito",
-    search_term2="lyso"
-):
-    """
-    Searches for GXPARM.XDS files in subdirectories matching search terms,
-    extracts unit cell constants and CC/R statistics, and writes to a CSV.
-    """
-    # CSV header
-    header = [
-        "Directory", "Unit Cell a", "Unit Cell b", "Unit Cell c",
-        "Unit Cell alpha", "Unit Cell beta", "Unit Cell gamma",
-        "CC/2", "R-merge", "R-meas", "R-pim", "Subdirectory", "Subdirectory_12"
-    ]
-
-    with open(csv_file, 'w', newline='') as f_out:
-        writer = csv.writer(f_out)
-        writer.writerow(header)
-
-        # Walk through directories to find GXPARM.XDS files
-        for root, dirs, files in os.walk(search_directory):
-            for file in files:
-                if file == "GXPARM.XDS":
-                    directory = os.path.abspath(root)
-                    if (search_term1 in directory) or (search_term2 and search_term2 in directory):
-                        gxparm_path = os.path.join(directory, file)
-
-                        # Extract unit cell constants from GXPARM.XDS (line 4, columns 2-7)
-                        try:
-                            with open(gxparm_path, 'r') as gx:
-                                lines = gx.readlines()
-                                line4 = lines[3].split()  # 0-based index
-                                unit_cell = line4[1:7]  # columns 2-7
-                        except Exception:
-                            unit_cell = [""] * 6
-
-                        # Extract CC/2, R-merge, R-meas, R-pim from CORRECT.LP
-                        correct_lp_path = os.path.join(directory, "CORRECT.LP")
-                        cc2 = r_merge = r_meas = r_pim = ""
-                        if os.path.isfile(correct_lp_path):
-                            with open(correct_lp_path, 'r') as lp:
-                                lp_lines = lp.readlines()
-                                for i, line in enumerate(lp_lines):
-                                    if "WILSON STATISTICS" in line:
-                                        # Using relative line offsets based on Bash script
-                                        try:
-                                            cc2 = lp_lines[i-13].split()[10]
-                                            r_merge = lp_lines[i-13].split()[4]
-                                            r_meas = lp_lines[i-13].split()[12]
-                                            r_pim = lp_lines[i-21].split()[9]
-                                        except Exception:
-                                            pass
-                                        break
-
-                        # Extract subdirectory names
-                        path_parts = directory.split(os.sep)
-                        subdirectory = path_parts[-5] if len(path_parts) >= 5 else ""
-                        subdirectory_12 = path_parts[-3] if len(path_parts) >= 3 else ""
-
-                        # Write row to CSV
-                        writer.writerow([directory, *unit_cell, cc2, r_merge, r_meas, r_pim, subdirectory, subdirectory_12])
-
-    return csv_file
-
-# 6 step
-def modify_correct_output(input_file="correct-readout.out", output_file="modify_correct_output.list"):
-    """
-    Processes a CSV file, extracts POSITION from the first column, selects specific columns,
-    and writes a modified CSV with header: POSITION,Unit Cell a,Unit Cell c,CC/2,R-meas.
-    """
-    if not os.path.isfile(input_file):
-        raise FileNotFoundError(f"Input file '{input_file}' not found.")
-
-    with open(input_file, 'r') as fin, open(output_file, 'w', newline='') as fout:
-        reader = csv.reader(fin)
-        writer = csv.writer(fout)
-
-        # Write header
-        writer.writerow(["POSITION", "Unit Cell a", "Unit Cell c", "CC/2", "R-meas"])
-
-        # Skip header in input
-        next(reader, None)
-
-        for row in reader:
-            if not row or len(row) < 10:
-                continue  # skip empty or malformed lines
-
-            # Extract POSITION from the last part of the first column
-            path_parts = row[0].split('/')
-            last_part = path_parts[-1]
-            pos_parts = last_part.split("POSITION_")
-            position = pos_parts[1] if len(pos_parts) == 2 else ""
-
-            # Select specific columns
-            unit_cell_a = row[1]
-            unit_cell_c = row[3]
-            cc2 = row[7]
-            r_meas = row[9]
-
-            writer.writerow([position, unit_cell_a, unit_cell_c, cc2, r_meas])
-
-    return output_file
-
-# 7 step. wtf is that
-def merge_xds_data(
-    humid_file="05_combine_02and04.list",
-    raw_position_file="correct-readout.out",
-    output_file="08_merge_xds_data.list"
-):
-    """
-    Merge humidity data and unit cell data by POSITION into a single CSV.
+        writer.writerow(csv_header)
     
-    Args:
-        humid_file: CSV from combine_02and04.list
-        raw_position_file: CSV from correct-readout.out
-        output_file: final merged CSV
-    """
-    if not os.path.isfile(humid_file) or not os.path.isfile(raw_position_file):
-        raise FileNotFoundError("One or both input files not found.")
+    reference_dataset = sys.argv[3]
+    user = sys.argv[4]
+    reserved_nodes = sys.argv[5]
+    slurm_partition = sys.argv[6]
+    ssh_private_key_path = sys.argv[7]
+    ssh_public_key_path = sys.argv[8]
+    login_node = sys.argv[9] if len(sys.argv) > 9 else None
+    if "maxwell" in reserved_nodes:
+        login_node = None  # local submit on maxwell
 
-    # Step 1: Preprocess raw position file
-    corrected_position_file = "tmp_corrected_position.csv"
-    with open(raw_position_file, 'r') as f_in, open(corrected_position_file, 'w', newline='') as f_out:
-        reader = csv.reader(f_in)
-        writer = csv.writer(f_out)
-        writer.writerow(["POSITION","Cell_a","Cell_b","Cell_c","Alpha","Beta","Gamma","CC12","Rmerge","Rmeas","Rpim","Subdir1","Subdir2"])
-
-        next(reader, None)  # skip header
-        for row in reader:
-            if len(row) < 8:
+    while not os.path.exists(input_path):
+        time.sleep(SLEEP_TIME)
+    os.makedirs(current_data_processing_folder, exist_ok=True)
+    os.chmod(current_data_processing_folder, 0o755)
+    
+    info_txt_file = os.path.join(input_path, 'info.txt')
+    
+    if not os.path.exists(info_txt_file):
+        print("Info txt does not exist, not gonna work for you, dummy")
+        exit()
+    
+    humidity, temperature, position = read_info_txt(info_txt_file)
+    
+    groups = group_humidity_plateaus(humidity, temperature, position)
+    
+    csvfile = open(output_csv, 'a', newline='')
+    for humidity_level, data in groups.items():
+        os.makedirs(os.path.join(current_data_processing_folder, f'humidity_{str(humidity_level).replace(".", "p")}'), exist_ok=True)
+        positions = data['positions']
+        xds_ascii_files = []
+        space_groups = []
+        UC_a = []
+        UC_b = []
+        UC_c = []
+        alpha = []
+        beta = []
+        gamma = []
+        for position in positions:
+            position_path = os.path.join(input_path, str(position))
+            if not os.path.exists(position_path):
+                print(f"Position path {position_path} does not exist, skipping")
                 continue
-            dir_field, unitcell_str, cc2, rmerge, rmeas, rpim, sdir1, sdir2 = row[:8]
-
-            match = re.search(r"POSITION_([0-9]+)", dir_field)
-            if not match:
+            # Derive SG and UC
+            gxparm_filepath = os.path.join(position_path, 'GXPARM.XDS')
+            if not os.path.exists(gxparm_filepath):
+                print("GXPARM file does not exist, skipping this position")
                 continue
-            pos = match.group(1)
-
-            try:
-                a, b, c, alpha, beta, gamma = unitcell_str.split()
-            except ValueError:
-                a = b = c = alpha = beta = gamma = ""
-
-            writer.writerow([pos, a, b, c, alpha, beta, gamma, cc2, rmerge, rmeas, rpim, sdir1, sdir2])
-
-    # Step 2: Extract run numbers from humidity file
-    tmp_humid_file = "tmp_humid.csv"
-    with open(humid_file, 'r') as f_in, open(tmp_humid_file, 'w', newline='') as f_out:
-        reader = csv.reader(f_in)
-        writer = csv.writer(f_out)
-        writer.writerow(["POSITION","Filename","ModificationTime","Value1"])
-        next(reader, None)  # skip header
-
-        for row in reader:
-            if len(row) < 3:
+            space_group, unit_cell = read_gxparm_xds(gxparm_filepath)
+            space_groups.append(space_group if space_group else np.nan)
+            UC_a.append(unit_cell[0] if unit_cell else np.nan)
+            UC_b.append(unit_cell[1] if unit_cell else np.nan)
+            UC_c.append(unit_cell[2] if unit_cell else np.nan)
+            alpha.append(unit_cell[3] if unit_cell else np.nan)
+            beta.append(unit_cell[4] if unit_cell else np.nan)
+            gamma.append(unit_cell[5] if unit_cell else np.nan)
+            
+            correct_lp_path = os.path.join(position_path, 'CORRECT.LP')
+            if not os.path.exists(correct_lp_path):
+                print("CORRECT.LP file does not exist, skipping this position")
                 continue
-            filename = row[0]
-            mod_time = row[1]
-            value1 = row[2]
-
-            match = re.search(r"_([0-9]+)_00001\.cbf", filename)
-            if not match:
+            CChalf, Rmerge, Rmeas, Rpim = read_correct_lp_file(correct_lp_path)
+            
+            csvfile_writer = csv.writer(csvfile)
+            csvfile_writer.writerow([position, UC_a[-1], UC_b[-1], UC_c[-1], alpha[-1], beta[-1], gamma[-1], space_groups[-1], CChalf, Rmeas, Rpim, Rmerge])
+            xds_ascii_file = os.path.join(position_path, 'XDS_ASCII.HKL')
+            if not os.path.exists(xds_ascii_file):
+                print("XDS_ASCII.HKL file does not exist, skipping this position")
                 continue
-            run_num = int(match.group(1))
-            writer.writerow([run_num, filename, mod_time, value1])
-
-    # Step 3: Load both CSVs into dictionaries for merging
-    position_data = {}
-    with open(corrected_position_file, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            position_data[row["POSITION"]] = row
-
-    humid_data = []
-    with open(tmp_humid_file, 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            humid_data.append(row)
-
-    # Step 4: Merge and write final CSV
-    header = ["POSITION","Filename","ModificationTime","Value1","Cell_a","Cell_b","Cell_c","Alpha","Beta","Gamma","CC12","Rmerge","Rmeas","Rpim","Subdir1","Subdir2"]
-    with open(output_file, 'w', newline='') as f_out:
-        writer = csv.writer(f_out)
-        writer.writerow(header)
-
-        for row in humid_data:
-            pos = str(row["POSITION"])
-            if pos in position_data:
-                pos_row = position_data[pos]
-                merged_row = [
-                    pos,
-                    row["Filename"],
-                    row["ModificationTime"],
-                    row["Value1"],
-                    pos_row["Cell_a"],
-                    pos_row["Cell_b"],
-                    pos_row["Cell_c"],
-                    pos_row["Alpha"],
-                    pos_row["Beta"],
-                    pos_row["Gamma"],
-                    pos_row["CC12"],
-                    pos_row["Rmerge"],
-                    pos_row["Rmeas"],
-                    pos_row["Rpim"],
-                    pos_row["Subdir1"],
-                    pos_row["Subdir2"]
-                ]
-                writer.writerow(merged_row)
-
-    # Clean up temporary files
-    os.remove(corrected_position_file)
-    os.remove(tmp_humid_file)
-
-    return output_file
+            xds_ascii_files.append(xds_ascii_file)
+        median_space_group = np.median([sg for sg in space_groups if not np.isnan(sg)]) if space_groups else None
+        avg_UC_a = mean([a for a in UC_a if not np.isnan(a)]) if UC_a else None
+        avg_UC_b = mean([b for b in UC_b if not np.isnan(b)]) if UC_b else None
+        avg_UC_c = mean([c for c in UC_c if not np.isnan(c)]) if UC_c else None
+        avg_alpha = mean([al for al in alpha if not np.isnan(al)]) if alpha else None
+        avg_beta = mean([be for be in beta if not np.isnan(be)]) if beta else None   
+        avg_gamma = mean([ga for ga in gamma if not np.isnan(ga)]) if gamma else None
+        space_group_line = f"SPACE_GROUP_NUMBER={int(median_space_group)}" if median_space_group else "!SPACE_GROUP_NUMBER"
+        unit_cell_line = f"UNIT_CELL_CONSTANTS={avg_UC_a} {avg_UC_b} {avg_UC_c} {avg_alpha} {avg_beta} {avg_gamma}" if all(v is not None for v in [avg_UC_a, avg_UC_b, avg_UC_c, avg_alpha, avg_beta, avg_gamma]) else "!UNIT_CELL_CONSTANTS"
+        reference_dataset_line = f"REFERENCE_DATA_SET={reference_dataset}" if reference_dataset.lower() != "none" else "!REFERENCE_DATA_SET"
+        xscale_inp = xscale_inp_generating(
+            input_path=input_path,
+            current_data_processing_folder=os.path.join(current_data_processing_folder, f'humidity_{str(humidity_level).replace(".", "p")}'),
+            space_group_number=space_group_line,
+            unit_cell_constants=unit_cell_line,
+            reference_dataset=reference_dataset_line,
+            xds_ascii_files=xds_ascii_files,
+            output_hkl=f"humidity_{str(humidity_level).replace('.', 'p')}.ahkl"
+        ) 
+        print(f"Generated XSCALE.INP at {xscale_inp}")
+        # Submit
+        xscale_start(
+            current_data_processing_folder=os.path.join(current_data_processing_folder, f'humidity_{str(humidity_level).replace(".", "p")}'),
+            user=user,
+            reserved_nodes=reserved_nodes,
+            slurm_partition=slurm_partition,
+            ssh_private_key_path=ssh_private_key_path,
+            ssh_public_key_path=ssh_public_key_path,
+            login_node=login_node,
+        )
+    csvfile.close()
+      
+if __name__ == "__main__":
+    main()
