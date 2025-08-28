@@ -71,26 +71,28 @@ def read_correct_lp_file(correct_lp_path: str):
 from typing import List, Dict
 from statistics import mean
 
-def group_humidity_plateaus(humidity: List[float], temperatures: List[float], positions: List[int], tolerance: float = 0.5) -> Dict[float, Dict]:
+def group_humidity_plateaus(positions_humidity_temperature: Dict[int, Dict[float,float]], tolerance: float = 0.5) -> Dict[float, Dict]:
     groups: Dict[float, Dict] = {}
-    if not humidity:
+    
+    if not positions_humidity_temperature:
         return groups
     
     tolerance /= 100
-    
-    current_positions = [positions[0]]
-    current_humidities = [humidity[0]]
-    current_temperatures = [temperatures[0]]
+
+    current_positions = [list(positions_humidity_temperature.keys())[0]]
+    current_humidities = [list(positions_humidity_temperature.values())[0][0]]
+    current_temperatures = [list(positions_humidity_temperature.values())[0][1]]
 
     for h, t, p in zip(humidity[1:], temperatures[1:], positions[1:]):
         # Check if this humidity is within tolerance of the current group
-        if abs(h - mean(current_humidities)) <= tolerance:
+        curr_avg_humidity_group = mean(current_humidities)
+        if abs(h - curr_avg_humidity_group)/abs(curr_avg_humidity_group) <= tolerance:
             current_positions.append(p)
             current_humidities.append(h)
             current_temperatures.append(t)
         else:
             # Finalize the current plateau
-            avg_hum = round(mean(current_humidities), 2)
+            avg_hum = round(curr_avg_humidity_group, 2)
             groups[avg_hum] = {
                 "avg_temperature": mean(current_temperatures),
                 "positions": current_positions
