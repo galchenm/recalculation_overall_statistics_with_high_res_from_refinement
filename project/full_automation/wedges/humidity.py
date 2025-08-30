@@ -5,10 +5,12 @@ import shlex
 import subprocess
 import time
 import csv
-from typing import List, Dict
+from typing import List, Dict, Tuple, Optional
 from statistics import mean
 import numpy as np
 from pathlib import Path
+import re
+import statistics
 
 LIMIT_FOR_RESERVED_NODES = 1000
 SLEEP_TIME = 15  # seconds
@@ -68,25 +70,23 @@ def read_correct_lp_file(correct_lp_path: str):
                     break
     return CChalf, Rmerge, Rmeas, Rpim
 
-from typing import List, Dict
-from statistics import mean
-
-def group_humidity_plateaus(positions_humidity_temperature: Dict[int, Dict[float,float]], tolerance: float = 0.5) -> Dict[float, Dict]:
+def group_humidity_plateaus(humidity: List[float], temperatures: List[float], positions: List[int], tolerance: float = 0.5) -> Dict[float, Dict]:
     groups: Dict[float, Dict] = {}
-    
-    if not positions_humidity_temperature:
+
+    if not humidity or not temperatures or not positions:
         return groups
     
     tolerance /= 100
 
-    current_positions = [list(positions_humidity_temperature.keys())[0]]
-    current_humidities = [list(positions_humidity_temperature.values())[0][0]]
-    current_temperatures = [list(positions_humidity_temperature.values())[0][1]]
+    current_positions = [positions[0]]
+    current_humidities = [humidity[0]]
+    current_temperatures = [temperatures[0]]
 
     for h, t, p in zip(humidity[1:], temperatures[1:], positions[1:]):
         # Check if this humidity is within tolerance of the current group
         curr_avg_humidity_group = mean(current_humidities)
-        if abs(h - curr_avg_humidity_group)/abs(curr_avg_humidity_group) <= tolerance:
+        rel = (abs(h - curr_avg_humidity_group) / abs(curr_avg_humidity_group)) if curr_avg_humidity_group != 0 else float("inf")
+        if rel <= tolerance:
             current_positions.append(p)
             current_humidities.append(h)
             current_temperatures.append(t)
@@ -141,8 +141,45 @@ def xscale_inp_generating(
             f.write(f"INPUT_FILE={file}\n")
     return xscale_inp
 
-def read_info_txt(info_txt_file: str) -> Tuple[List[float], List[float], List[int]]:
-    pass
+
+def read_info_txt(info_txt_file: str) -> Dict[int, Dict[str, float]]:
+    positions = {}
+
+    with open(info_txt_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line or ":" not in line:
+                continue
+
+            key, val = line.split(":", 1)
+            key = key.strip()
+            val = val.strip()
+
+            # Match entries like pos0_rh1, pos0_temp2, etc.
+            match = re.match(r"pos(\d+)_(rh|temp)\d+", key)
+            if match:
+                pos_num, kind = match.groups()
+                pos_num = int(pos_num)  # use integer as key
+
+                # Extract number inside brackets, e.g. [95.75] → 95.75
+                numbers = re.findall(r"[-+]?\d*\.\d+|\d+", val)
+                if not numbers:
+                    continue
+                value = float(numbers[0])
+
+                if pos_num not in positions:
+                    positions[pos_num] = {"rh": [], "temp": []}
+                positions[pos_num][kind].append(value)
+
+    # Compute median for each position
+    results = {}
+    for pos_num, data in positions.items():
+        humidity = statistics.median(data["rh"]) if data["rh"] else None
+        temp = statistics.median(data["temp"]) if data["temp"] else None
+        results[pos_num] = {"humidity": humidity, "temp": temp}
+
+    return results
+
 
 def xscale_start(
     current_data_processing_folder: str,
@@ -247,10 +284,19 @@ def main():
     
     if not os.path.exists(info_txt_file):
         print("Info txt does not exist, not gonna work for you, dummy")
-        exit()
+        sys.exit(1)
     
-    humidity, temperature, position = read_info_txt(info_txt_file)
+    position_humidity_temperature = read_info_txt(info_txt_file)
     
+    def dict_to_lists(results):
+        # sort by position number to keep order
+        positions = sorted(results.keys())
+        humidities = [results[pos]["humidity"] for pos in positions]
+        temps = [results[pos]["temp"] for pos in positions]
+        return positions, humidities, temps
+
+    position, humidity, temperature = dict_to_lists(position_humidity_temperature)
+
     groups = group_humidity_plateaus(humidity, temperature, position)
     
     csvfile = open(output_csv, 'a', newline='')
@@ -328,6 +374,6 @@ def main():
             login_node=login_node,
         )
     csvfile.close()
-      
+
 if __name__ == "__main__":
     main()
